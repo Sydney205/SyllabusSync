@@ -1,0 +1,19 @@
+# Secrets
+.env
+service_account.json
+*.service_account.json
+# Google Cloud key downloads are named <project-id>-<key-id>.json
+syllabussync-*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
