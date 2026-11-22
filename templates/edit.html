@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "_macros.html" import event_fields %}
+
+{% block title %}Edit event · SyllabusSync{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <a class="back-link" href="/admin">← Back to all events</a>
+  <h1>Edit event</h1>
+  <p class="lede">Changes are saved straight to the shared calendar.</p>
+</header>
+
+{% if message %}
+<div class="message error" role="alert">{{ message }}</div>
+{% endif %}
+
+{% if was_all_day %}
+<div class="message warning" role="note">This is an all-day event. Saving turns it into a timed event.</div>
+{% endif %}
+
+<form class="card" method="post" action="/events/{{ event_id | urlencode }}">
+  {{ event_fields(values, timezone) }}
+  <button class="primary-button" type="submit">Save changes</button>
+</form>
+{% endblock %}

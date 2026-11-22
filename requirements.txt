@@ -1,10 +1,18 @@
+# Web server
 fastapi>=0.115
 uvicorn[standard]>=0.30
-python-multipart>=0.0.9
+python-multipart>=0.0.9   # form parsing for /login and /events
+jinja2>=3.1               # HTML templates (templates/)
+markupsafe>=2.1           # imported directly in web_ui.py
+
+# Telegram bot
 python-telegram-bot>=21.0,<23
+
+# Google Calendar
 google-api-python-client>=2.130
 google-auth>=2.29
+
+# Parsing / config
 python-dateutil>=2.9
 python-dotenv>=1.0
-jinja2>=3.1
-tzdata>=2024.1
+tzdata>=2024.1            # timezone data for zoneinfo on Windows
