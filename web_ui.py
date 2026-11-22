@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import re
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
@@ -18,6 +19,18 @@ TEMPLATE_DIR = ROOT / "templates"
 STATIC_DIR = ROOT / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+
+
+def _static_version() -> str:
+    """Short hash of the stylesheet, appended as ?v=... so browsers and CDNs fetch the
+    new CSS after every deploy instead of serving a stale cached copy."""
+    try:
+        return hashlib.sha1((STATIC_DIR / "styles.css").read_bytes()).hexdigest()[:10]
+    except OSError:
+        return "0"
+
+
+templates.env.globals["static_version"] = _static_version()
 
 VIEWS = ("month", "agenda")
 MAX_CHIPS_PER_DAY = 3
