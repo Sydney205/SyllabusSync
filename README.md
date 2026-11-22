@@ -11,7 +11,9 @@ main.py                FastAPI app: lifespan (bot start/stop), /, /login, /event
 bot_handler.py         Telegram handlers (admin filter, replies, /whoami)
 announcement_parser.py Turns announcement text into events (course, date, time, link)
 calendar_service.py    Service-account auth + create_calendar_event(...)
-web_ui.py              HTML/CSS for the form (no frameworks)
+templates/*.html       HTML templates for the login and calendar form
+static/styles.css      Responsive styles for the web UI
+web_ui.py              Template rendering helpers
 config.py              Reads environment variables / .env
 tests/test_parser.py   Parser tests using real Miva announcement samples
 ```

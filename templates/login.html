@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="page-header">
+  <h1>SyllabusSync</h1>
+  <p class="lede">Enter the passcode to add class events.</p>
+</header>
+
+{% if error %}
+<div class="message error" role="alert">{{ error }}</div>
+{% endif %}
+
+<form class="card" method="post" action="/login">
+  <div class="field">
+    <label for="passcode">Passcode</label>
+    <input id="passcode" name="passcode" type="password" autocomplete="current-password" required autofocus>
+  </div>
+  <button class="primary-button" type="submit">Unlock</button>
+</form>
+{% endblock %}

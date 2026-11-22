@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="page-header">
+  <h1>SyllabusSync</h1>
+  <p class="lede">Add a class to the shared Google Calendar.</p>
+</header>
+
+{% if message %}
+<div class="message {{ 'success' if ok else 'error' }}" role="status">{{ message }}</div>
+{% endif %}
+
+<form class="card" method="post" action="/events">
+  <div class="field">
+    <label for="title">Title</label>
+    <input id="title" name="title" required maxlength="200"
+           placeholder="COS 102 - Problem Solving" value="{{ values.get('title', '') }}">
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label for="start">Date &amp; start time</label>
+      <input id="start" name="start" type="datetime-local" required value="{{ values.get('start', '') }}">
+      <p class="hint">Times are in {{ timezone }}.</p>
+    </div>
+    <div class="field">
+      <label for="duration">Duration (minutes)</label>
+      <input id="duration" name="duration" type="number" min="5" max="720" step="5" required
+             value="{{ values.get('duration', '60') }}">
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="notes">Meeting link / notes</label>
+    <textarea id="notes" name="notes" placeholder="https://meet.google.com/...">{{ values.get('notes', '') }}</textarea>
+  </div>
+
+  <button class="primary-button" type="submit">Add to calendar</button>
+</form>
+
+{% if show_logout %}
+<form class="page-footer" method="post" action="/logout">
+  <button class="text-button" type="submit">Lock</button>
+</form>
+{% endif %}
+{% endblock %}

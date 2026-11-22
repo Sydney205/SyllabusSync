@@ -16,13 +16,14 @@ from html import escape
 
 from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from telegram import Update
 
 import config
 from announcement_parser import URL_RE
 from bot_handler import build_application, fmt_range
 from calendar_service import CalendarConfigError, create_calendar_event
-from web_ui import form_page, login_page
+from web_ui import STATIC_DIR, form_page, login_page
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log the bot token in request URLs
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SyllabusSync", lifespan=lifespan, docs_url=None, redoc_url=None)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # ---------------------------------------------------------------------------
@@ -146,17 +148,20 @@ def _wants_json(request: Request) -> bool:
     return "application/json" in accept and "text/html" not in accept
 
 
-def _form(request: Request, status: int = 200, **kwargs) -> HTMLResponse:
-    return HTMLResponse(
-        form_page(show_logout=bool(config.WEB_UI_PASSWORD), timezone=config.DEFAULT_TIMEZONE, **kwargs),
+def _form(request: Request, status: int = 200, **kwargs):
+    return form_page(
+        request,
         status_code=status,
+        show_logout=bool(config.WEB_UI_PASSWORD),
+        timezone=config.DEFAULT_TIMEZONE,
+        **kwargs,
     )
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     if not _is_authed(request):
-        return HTMLResponse(login_page())
+        return login_page(request)
     return _form(request)
 
 
@@ -166,7 +171,7 @@ async def login(request: Request, passcode: str = Form("")):
         return RedirectResponse("/", status_code=303)
     if not _password_ok(passcode):
         await asyncio.sleep(1)  # slow down guessing
-        return HTMLResponse(login_page("Wrong passcode."), status_code=401)
+        return login_page(request, "Wrong passcode.", status_code=401)
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(
         SESSION_COOKIE,
@@ -211,7 +216,7 @@ async def create_event(
     if not _is_authed(request, passcode):
         if json_mode:
             return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
-        return HTMLResponse(login_page("Please enter the passcode first."), status_code=401)
+        return login_page(request, "Please enter the passcode first.", status_code=401)
 
     title = title.strip()
     if not title:
