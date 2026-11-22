@@ -53,13 +53,28 @@ def _load_credentials() -> service_account.Credentials:
             raise CalendarConfigError(f"GOOGLE_CREDENTIALS_JSON is not valid JSON: {exc}") from exc
         return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
-    path = config.GOOGLE_CREDENTIALS_FILE
-    if os.path.exists(path):
+    path = (config.GOOGLE_CREDENTIALS_FILE or "").strip()
+
+    # Common mistake: pasting the key JSON into GOOGLE_CREDENTIALS_FILE. Accept it, and
+    # never echo the value back, because it contains the private key.
+    if path.startswith("{"):
+        try:
+            info = json.loads(path)
+        except json.JSONDecodeError:
+            raise CalendarConfigError(
+                "GOOGLE_CREDENTIALS_FILE looks like JSON but isn't valid. It should be a file path; "
+                "put the key's JSON in GOOGLE_CREDENTIALS_JSON instead."
+            ) from None
+        log.warning("GOOGLE_CREDENTIALS_FILE contains the key JSON; please rename it to GOOGLE_CREDENTIALS_JSON.")
+        return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+
+    if path and os.path.exists(path):
         return service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
 
+    shown = path if len(path) <= 200 else path[:200] + "…"
     raise CalendarConfigError(
-        "No Google credentials found. Set GOOGLE_CREDENTIALS_JSON or place "
-        f"a service account key at {path!r}."
+        "No Google credentials found. Set GOOGLE_CREDENTIALS_JSON, or set GOOGLE_CREDENTIALS_FILE "
+        f"to the key file's path (currently {shown!r}, which doesn't exist)."
     )
 
 
