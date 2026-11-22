@@ -47,6 +47,40 @@ SESSION_COOKIE = "ss_session"
 # ---------------------------------------------------------------------------
 
 
+class WebhookInUseError(RuntimeError):
+    """Polling was requested for a bot token that a deployed server is using via webhook."""
+
+
+async def _refuse_to_steal_webhook(tg) -> None:
+    """Stop local polling from silently disconnecting a deployed (webhook) bot.
+
+    Starting to poll deletes the token's webhook, so the deployed server would stop
+    receiving announcements until it restarts. Refuse unless FORCE_POLLING=true.
+    """
+    try:
+        info = await tg.bot.get_webhook_info()
+    except Exception as exc:  # network trouble: don't block startup, polling will retry anyway
+        log.warning("Couldn't check for an existing Telegram webhook (%s); continuing.", exc)
+        return
+    if not info.url:
+        return
+    if config.FORCE_POLLING:
+        log.warning(
+            "FORCE_POLLING=true: removing the webhook at %s. The deployed bot will stop receiving "
+            "messages until it restarts.",
+            info.url,
+        )
+        return
+    raise WebhookInUseError(
+        "\n\n"
+        "  This bot token already has a webhook: %s\n"
+        "  Another server (probably your deployed one) is receiving its messages.\n"
+        "  Starting in polling mode would delete that webhook and take its messages away.\n\n"
+        "  Fix: use a separate test bot token in your local .env (BotFather > /newbot).\n"
+        "  Or, if you really mean to take over this bot, set FORCE_POLLING=true.\n" % info.url
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tg = None
@@ -54,6 +88,11 @@ async def lifespan(app: FastAPI):
         tg = build_application()
         await tg.initialize()
         if config.RUN_POLLING:
+            try:
+                await _refuse_to_steal_webhook(tg)
+            except Exception:
+                await tg.shutdown()
+                raise
             # start_polling removes any existing webhook first.
             await tg.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
             log.info("Telegram bot running in POLLING mode.")

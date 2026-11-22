@@ -49,6 +49,9 @@ PUBLIC_BASE_URL = (
     or ""
 ).strip().rstrip("/")
 RUN_POLLING = _bool("RUN_POLLING", False)
+# Polling with a token that already has a webhook would silently take messages away from the
+# deployed bot, so startup refuses unless this is explicitly set to true.
+FORCE_POLLING = _bool("FORCE_POLLING", False)
 
 # --- Web UI ---
 WEB_UI_PASSWORD = os.getenv("WEB_UI_PASSWORD", "")
