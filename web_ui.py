@@ -21,19 +21,29 @@ STATIC_DIR = ROOT / "static"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
 
-def _static_version() -> str:
-    """Short hash of the stylesheet, appended as ?v=... so browsers and CDNs fetch the
-    new CSS after every deploy instead of serving a stale cached copy."""
+_asset_versions: dict[str, str] = {}
+
+
+def file_hash(path: Path) -> str:
     try:
-        return hashlib.sha1((STATIC_DIR / "styles.css").read_bytes()).hexdigest()[:10]
+        return hashlib.sha1(path.read_bytes()).hexdigest()[:10]
     except OSError:
         return "0"
 
 
-templates.env.globals["static_version"] = _static_version()
+def asset_url(name: str) -> str:
+    """/static/<name>?v=<short hash>: the hash changes whenever the file changes, so
+    browsers, CDNs and the service worker fetch the new file after every deploy."""
+    if name not in _asset_versions:
+        _asset_versions[name] = file_hash(STATIC_DIR / name)
+    return f"/static/{name}?v={_asset_versions[name]}"
+
+
+templates.env.globals["asset_url"] = asset_url
 
 VIEWS = ("month", "agenda")
 MAX_CHIPS_PER_DAY = 3
+UPCOMING_COUNT = 4
 WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]  # Google Calendar's default week
 
 # Fixed status messages shown after a redirect (/admin?done=created). Codes, not free
@@ -55,6 +65,10 @@ def login_page(request, error: str | None = None, status_code: int = 200):
     return templates.TemplateResponse(
         request=request, name="login.html", context={"error": error}, status_code=status_code
     )
+
+
+def offline_page(request):
+    return templates.TemplateResponse(request=request, name="offline.html", context={})
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +220,25 @@ def calendar_page(
         for d, items in groupby(month_events, key=lambda e: e.start.date())
     ]
 
+    # "Next up": the next few events that haven't ended, whatever month is on screen.
+    upcoming_events = sorted((e for e in visible if e.end > now), key=lambda e: e.start)[:UPCOMING_COUNT]
+    upcoming = []
+    for e in upcoming_events:
+        card = _card(e, now)
+        d = e.start.date()
+        card["when"] = (
+            "Now" if card["live"]
+            else ("Today" if d == today else "Tomorrow" if d == today + timedelta(days=1) else d.strftime("%a %d %b"))
+        )
+        upcoming.append(card)
+
     # Every event that can be clicked on this page gets a details popover.
     shown_ids, popovers = set(), []
     for e in visible:
-        if grid_start <= e.start.date() < cursor or month_start <= e.start.date() < month_end:
-            if e.id not in shown_ids:
-                shown_ids.add(e.id)
-                popovers.append(_card(e, now))
+        on_screen = grid_start <= e.start.date() < cursor or month_start <= e.start.date() < month_end
+        if (on_screen or e in upcoming_events) and e.id not in shown_ids:
+            shown_ids.add(e.id)
+            popovers.append(_card(e, now))
 
     nav = {
         "prev": _url(base, view=view, date=_shift_month(month_start, -1).isoformat(), label=label_filter),
@@ -245,6 +271,8 @@ def calendar_page(
             "weeks": weeks,
             "agenda": agenda,
             "popovers": popovers,
+            "upcoming": upcoming,
+            "is_current_month": month_start == today.replace(day=1),
             "nav": nav,
             "filters": filters,
             "label_filter": label_filter,

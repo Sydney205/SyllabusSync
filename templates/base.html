@@ -1,19 +1,52 @@
-<!doctype html>
+{% from "_icons.html" import icon %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}SyllabusSync{% endblock %}</title>
+  <meta name="description" content="Live classes, exams, meetings and events from the shared class calendar.">
+
+  <!-- Installable app (PWA) -->
+  <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#1f1f1f" media="(prefers-color-scheme: dark)">
-  <title>{% block title %}SyllabusSync{% endblock %}</title>
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SyllabusSync">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ asset_url('icons/favicon-32.png') }}">
+  <link rel="icon" type="image/png" sizes="64x64" href="{{ asset_url('icons/favicon-64.png') }}">
+  <link rel="apple-touch-icon" href="{{ asset_url('icons/apple-touch-icon.png') }}">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="/static/styles.css?v={{ static_version }}">
+  <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
+  <script src="{{ asset_url('app.js') }}" defer></script>
 </head>
 <body>
+  {% include "_icons.html" %}
+
+  <div class="offline-bar" id="offline-bar" role="status" hidden>
+    {{ icon("wifi-off") }} You're offline. Showing the last saved schedule.
+  </div>
+
   <main class="page-shell {% block shell_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- Install instructions for browsers without an install prompt (iPhone/iPad Safari) -->
+  <dialog class="install-dialog" id="install-dialog" aria-labelledby="install-title">
+    <form method="dialog">
+      <img class="install-logo" src="{{ asset_url('icons/icon-192.png') }}" alt="" width="64" height="64">
+      <h2 id="install-title">Install SyllabusSync</h2>
+      <ol class="install-steps">
+        <li>Tap the {{ icon("share") }} <strong>Share</strong> button in Safari's toolbar.</li>
+        <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+        <li>Tap <strong>Add</strong>. SyllabusSync opens like an app from your home screen.</li>
+      </ol>
+      <button class="btn btn-primary" value="close">Got it</button>
+    </form>
+  </dialog>
 </body>
 </html>

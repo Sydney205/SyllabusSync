@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "_macros.html" import month_grid, agenda_view, popover %}
+{% from "_macros.html" import month_grid, agenda_view, popover, upcoming_list %}
+{% from "_icons.html" import icon %}
 
 {% block title %}{{ title }} · {% if admin %}Admin · {% endif %}SyllabusSync{% endblock %}
 {% block shell_class %}app-shell{% endblock %}
@@ -7,45 +8,57 @@
 {% block content %}
 <header class="topbar">
   <div class="topbar-left">
-    <a class="brand" href="{{ '/admin' if admin else '/' }}">
-      <span class="brand-mark" aria-hidden="true">📅</span><span class="brand-name">SyllabusSync</span>
+    <a class="brand" href="{{ '/admin' if admin else '/' }}" aria-label="SyllabusSync home">
+      <img class="brand-mark" src="{{ asset_url('icons/logo-mark.png') }}" alt="" width="36" height="36">
+      <span class="brand-name">SyllabusSync</span>
+      {% if admin %}<span class="brand-badge">Admin</span>{% endif %}
     </a>
   </div>
 
   <div class="topbar-nav">
-    <a class="pill-btn" href="{{ nav.today }}">Today</a>
-    <a class="icon-btn" href="{{ nav.prev }}" aria-label="Previous month">‹</a>
-    <a class="icon-btn" href="{{ nav.next }}" aria-label="Next month">›</a>
+    <a class="pill-btn{% if is_current_month %} is-current{% endif %}" href="{{ nav.today }}">Today</a>
+    <a class="icon-btn" href="{{ nav.prev }}" aria-label="Previous month" title="Previous month">{{ icon("chevron-left") }}</a>
+    <a class="icon-btn" href="{{ nav.next }}" aria-label="Next month" title="Next month">{{ icon("chevron-right") }}</a>
     <h1 class="range-title">{{ title }}</h1>
   </div>
 
   <div class="topbar-right">
     <nav class="view-switch" aria-label="View">
-      <a href="{{ nav.month }}" {% if view == 'month' %}aria-current="page"{% endif %}>Month</a>
-      <a href="{{ nav.agenda }}" {% if view == 'agenda' %}aria-current="page"{% endif %}>Schedule</a>
+      <a href="{{ nav.month }}" {% if view == 'month' %}aria-current="page"{% endif %}>{{ icon("calendar-grid") }}<span>Month</span></a>
+      <a href="{{ nav.agenda }}" {% if view == 'agenda' %}aria-current="page"{% endif %}>{{ icon("list") }}<span>Schedule</span></a>
     </nav>
+    <button class="pill-btn install-btn" id="install-btn" type="button" hidden>{{ icon("download") }}<span>Install</span></button>
     {% if admin %}
-      <a class="text-link" href="/">Public view</a>
+      <a class="icon-btn" href="/" aria-label="Public view" title="Public view">{{ icon("eye") }}</a>
       {% if show_logout %}
-      <form method="post" action="/logout"><button class="text-link" type="submit">Lock</button></form>
+      <form method="post" action="/logout">
+        <button class="icon-btn" type="submit" aria-label="Lock admin" title="Lock admin">{{ icon("lock") }}</button>
+      </form>
       {% endif %}
     {% else %}
-      <a class="text-link" href="/admin">Admin</a>
+      <a class="icon-btn" href="/admin" aria-label="Admin" title="Admin">{{ icon("shield") }}</a>
     {% endif %}
   </div>
 </header>
 
 {% if message %}
-<div class="banner {{ 'banner-ok' if ok else 'banner-error' }}" role="status">{{ message }}</div>
+<div class="banner {{ 'banner-ok' if ok else 'banner-error' }}" role="status">
+  {{ icon("check-circle" if ok else "alert-circle") }}<span>{{ message }}</span>
+</div>
 {% endif %}
 
 <div class="layout">
   <aside class="sidebar">
     {% if admin %}
-    <a class="create-btn" href="/admin/events/new"><span aria-hidden="true">＋</span> Create</a>
+    <a class="create-btn" href="/admin/events/new">{{ icon("plus") }}<span>Create</span></a>
     {% endif %}
 
-    <div class="side-card">
+    <section class="side-card">
+      <h2 class="side-heading">Next up</h2>
+      {{ upcoming_list(upcoming) }}
+    </section>
+
+    <section class="side-card">
       <h2 class="side-heading">Labels</h2>
       <ul class="legend">
         {% for f in filters %}
@@ -60,39 +73,38 @@
         {% endfor %}
       </ul>
       {% if label_filter %}
-      <a class="text-link small" href="{{ clear_filter_url }}">Show all labels</a>
-      {% else %}
-      <p class="side-hint">Tap a label to show only those.</p>
+      <a class="text-link small" href="{{ clear_filter_url }}">{{ icon("x") }}Show all labels</a>
       {% endif %}
-    </div>
+    </section>
 
     {% if admin and quiet %}
     <form class="side-card quiet-card" method="post" action="/admin/quiet">
       <input type="hidden" name="quiet" value="{{ 'off' if quiet.quiet_mode else 'on' }}">
       <input type="hidden" name="return_to" value="{{ return_to }}">
       <div class="quiet-row">
-        <div>
+        <span class="quiet-icon{% if quiet.quiet_mode %} is-on{% endif %}">{{ icon("bell-off" if quiet.quiet_mode else "bell") }}</span>
+        <div class="quiet-text">
           <h2 class="side-heading">Telegram quiet mode</h2>
           <p class="side-hint">
-            {% if quiet.quiet_mode %}On: the bot syncs Live classes silently and never posts in groups.
-            {% else %}Off: the bot confirms what it schedules in the group.{% endif %}
+            {% if quiet.quiet_mode %}On. The bot syncs Live classes silently and never posts in groups.
+            {% else %}Off. The bot confirms what it schedules in the group.{% endif %}
           </p>
         </div>
         <button class="switch{% if quiet.quiet_mode %} is-on{% endif %}" type="submit" role="switch"
                 aria-checked="{{ 'true' if quiet.quiet_mode else 'false' }}"
-                aria-label="Quiet mode: {{ 'on' if quiet.quiet_mode else 'off' }}. Click to turn {{ 'off' if quiet.quiet_mode else 'on' }}.">
+                aria-label="Quiet mode is {{ 'on' if quiet.quiet_mode else 'off' }}. Turn it {{ 'off' if quiet.quiet_mode else 'on' }}.">
           <span class="switch-knob"></span>
         </button>
       </div>
     </form>
     {% endif %}
 
-    <p class="side-hint tz-note">Times are in {{ timezone }}.</p>
+    <p class="side-hint tz-note">{{ icon("clock") }}Times are in {{ timezone }}</p>
   </aside>
 
   <section class="main-view" aria-label="Calendar">
     {% if error %}
-      <div class="banner banner-error" role="alert">{{ error }}</div>
+      <div class="banner banner-error" role="alert">{{ icon("alert-circle") }}<span>{{ error }}</span></div>
     {% elif view == 'month' %}
       {{ month_grid(weeks, weekdays, admin) }}
     {% else %}
@@ -100,6 +112,10 @@
     {% endif %}
   </section>
 </div>
+
+{% if admin %}
+<a class="fab" href="/admin/events/new" aria-label="Create event">{{ icon("plus") }}</a>
+{% endif %}
 
 {% for c in popovers %}{{ popover(c, admin, return_to) }}{% endfor %}
 {% endblock %}

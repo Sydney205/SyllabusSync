@@ -1,20 +1,24 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
+
+{% block title %}Admin sign in · SyllabusSync{% endblock %}
 
 {% block content %}
-<header class="page-header">
-  <h1>SyllabusSync</h1>
+<div class="center-card fade-in">
+  <img class="lockup" src="{{ asset_url('icons/logo-lockup.png') }}" alt="SyllabusSync" width="220" height="207">
   <p class="lede">Enter the passcode to manage class events.</p>
-</header>
 
-{% if error %}
-<div class="message error" role="alert">{{ error }}</div>
-{% endif %}
+  {% if error %}
+  <div class="banner banner-error" role="alert">{{ icon("alert-circle") }}<span>{{ error }}</span></div>
+  {% endif %}
 
-<form class="card" method="post" action="/login">
-  <div class="field">
-    <label for="passcode">Passcode</label>
-    <input id="passcode" name="passcode" type="password" autocomplete="current-password" required autofocus>
-  </div>
-  <button class="primary-button" type="submit">Unlock</button>
-</form>
+  <form class="card" method="post" action="/login">
+    <div class="field">
+      <label for="passcode">Passcode</label>
+      <input id="passcode" name="passcode" type="password" autocomplete="current-password" required autofocus>
+    </div>
+    <button class="btn btn-primary btn-block" type="submit">{{ icon("lock") }}Unlock</button>
+  </form>
+  <a class="text-link back-link" href="/">{{ icon("arrow-left") }}Back to the calendar</a>
+</div>
 {% endblock %}

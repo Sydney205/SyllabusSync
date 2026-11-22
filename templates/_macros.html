@@ -1,7 +1,8 @@
 {# Shared building blocks for the calendar pages. #}
+{% from "_icons.html" import icon %}
 
 {% macro chip(c) %}
-<a class="chip lbl-{{ c.slug }}{% if c.all_day %} is-allday{% endif %}{% if c.past %} is-past{% endif %}"
+<a class="chip lbl-{{ c.slug }}{% if c.all_day %} is-allday{% endif %}{% if c.past %} is-past{% endif %}{% if c.live %} is-live{% endif %}"
    href="#{{ c.dom_id }}" title="{{ c.time_label }} · {{ c.title }} ({{ c.label }})">
   <span class="dot" aria-hidden="true"></span>
   {% if c.short_time %}<span class="chip-time">{{ c.short_time }}</span>{% endif %}
@@ -11,7 +12,7 @@
 
 
 {% macro month_grid(weeks, weekdays, admin) %}
-<div class="month" role="grid" aria-label="Month view">
+<div class="month fade-in" role="grid" aria-label="Month view">
   <div class="month-head" role="row">
     {% for w in weekdays %}<div class="month-weekday" role="columnheader">{{ w }}</div>{% endfor %}
   </div>
@@ -21,7 +22,7 @@
     <div class="day-cell{% if not d.in_month %} is-outside{% endif %}{% if d.is_today %} is-today{% endif %}" role="gridcell">
       <div class="day-top">
         <a class="day-num" href="{{ d.agenda_url }}" aria-label="{{ d.date.strftime('%A %d %B') }}">{{ d.day }}</a>
-        {% if admin %}<a class="day-add" href="{{ d.create_url }}" aria-label="Add an event on {{ d.date.strftime('%d %B') }}">+</a>{% endif %}
+        {% if admin %}<a class="day-add" href="{{ d.create_url }}" aria-label="Add an event on {{ d.date.strftime('%d %B') }}">{{ icon("plus") }}</a>{% endif %}
       </div>
       {% for c in d.chips %}{{ chip(c) }}{% endfor %}
       {% if d.more %}<a class="more-link" href="{{ d.agenda_url }}">+{{ d.more }} more</a>{% endif %}
@@ -35,9 +36,10 @@
 
 {% macro agenda_view(agenda, admin) %}
 {% if agenda %}
-<div class="agenda">
+<div class="agenda fade-in">
   {% for day in agenda %}
-  <section class="agenda-day{% if day.is_today %} is-today{% endif %}{% if day.past %} is-past{% endif %}" id="{{ day.dom_id }}">
+  <section class="agenda-day{% if day.is_today %} is-today{% endif %}{% if day.past %} is-past{% endif %}" id="{{ day.dom_id }}"
+           style="--i: {{ loop.index0 }}">
     <div class="agenda-date">
       <span class="agenda-daynum">{{ day.day }}</span>
       <span class="agenda-dayname">{{ day.month }}, {{ day.weekday }}</span>
@@ -45,10 +47,16 @@
     <div class="agenda-items">
       {% for c in day.cards %}
       <a class="agenda-item lbl-{{ c.slug }}" href="#{{ c.dom_id }}">
-        <span class="dot" aria-hidden="true"></span>
-        <span class="agenda-time">{{ c.time_label }}</span>
-        <span class="agenda-title">{{ c.title }}</span>
-        <span class="tag">{% if c.live %}Live now · {% endif %}{{ c.label }}</span>
+        <span class="label-bar" aria-hidden="true"></span>
+        <span class="agenda-main">
+          <span class="agenda-title">{{ c.title }}</span>
+          <span class="agenda-time">{{ icon("clock") }}{{ c.time_label }}</span>
+        </span>
+        <span class="agenda-side">
+          {% if c.live %}<span class="tag tag-live"><span class="pulse" aria-hidden="true"></span>Live now</span>{% endif %}
+          <span class="tag">{{ c.label }}</span>
+          {% if c.meeting_link %}<span class="has-link" title="Has a meeting link">{{ icon("video") }}</span>{% endif %}
+        </span>
       </a>
       {% endfor %}
     </div>
@@ -56,7 +64,34 @@
   {% endfor %}
 </div>
 {% else %}
-<p class="empty-state">Nothing scheduled this month.{% if admin %} Use <strong>Create</strong> to add something.{% endif %}</p>
+<div class="empty-state fade-in">
+  {{ icon("calendar", "empty-icon") }}
+  <p class="empty-title">Nothing scheduled this month</p>
+  <p class="empty-text">{% if admin %}Use <strong>Create</strong> to add a class, exam, meeting or event.{% else %}New classes appear here as soon as they're announced.{% endif %}</p>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{% macro upcoming_list(upcoming) %}
+{% if upcoming %}
+<ul class="upcoming">
+  {% for c in upcoming %}
+  <li>
+    <a class="upcoming-item lbl-{{ c.slug }}" href="#{{ c.dom_id }}">
+      <span class="label-bar" aria-hidden="true"></span>
+      <span class="upcoming-body">
+        <span class="upcoming-title">{{ c.title }}</span>
+        <span class="upcoming-when">
+          {% if c.live %}<span class="pulse" aria-hidden="true"></span>{% endif %}{{ c.when }} · {{ c.time_label }}
+        </span>
+      </span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="side-hint">Nothing coming up yet.</p>
 {% endif %}
 {% endmacro %}
 
@@ -67,33 +102,37 @@
   <div class="popover lbl-{{ c.slug }}">
     <div class="popover-tools">
       {% if admin %}
-      <a class="tool-btn" href="/admin/events/{{ c.id | urlencode }}/edit">✎ Edit</a>
+      <a class="icon-btn" href="/admin/events/{{ c.id | urlencode }}/edit" aria-label="Edit event" title="Edit">{{ icon("pencil") }}</a>
       <form method="post" action="/events/{{ c.id | urlencode }}/delete"
             onsubmit='return confirm({{ ("Delete “" ~ c.title ~ "”? This removes it from the shared calendar.") | tojson }})'>
         <input type="hidden" name="return_to" value="{{ return_to }}">
-        <button class="tool-btn tool-danger" type="submit">🗑 Delete</button>
+        <button class="icon-btn icon-btn-danger" type="submit" aria-label="Delete event" title="Delete">{{ icon("trash") }}</button>
       </form>
       {% endif %}
-      <a class="icon-btn" href="#close" aria-label="Close">✕</a>
+      <a class="icon-btn" href="#close" aria-label="Close" title="Close">{{ icon("x") }}</a>
     </div>
 
     <div class="popover-head">
       <span class="swatch" aria-hidden="true"></span>
       <div>
         <h2 class="popover-title" id="{{ c.dom_id }}-title">{{ c.title }}</h2>
-        <p class="popover-when">{{ c.date_label }}<br>{{ c.time_label }}</p>
+        {% if c.live %}<span class="tag tag-live"><span class="pulse" aria-hidden="true"></span>Live now</span>{% endif %}
       </div>
     </div>
 
-    <p class="popover-row"><span class="tag">{{ c.label }}</span>{% if c.live %} <span class="tag tag-live">Live now</span>{% endif %}</p>
-    {% if c.location %}<p class="popover-row popover-muted">📍 {{ c.location }}</p>{% endif %}
-    {% if c.notes %}<p class="popover-notes">{{ c.notes }}</p>{% endif %}
+    <ul class="detail-rows">
+      <li>{{ icon("clock") }}<span>{{ c.date_label }}<br><span class="muted">{{ c.time_label }}</span></span></li>
+      <li>{{ icon("tag") }}<span>{{ c.label }}</span></li>
+      {% if c.location %}<li>{{ icon("map-pin") }}<span class="wrap">{{ c.location }}</span></li>{% endif %}
+      {% if c.meeting_link %}<li>{{ icon("video") }}<a class="wrap link" href="{{ c.meeting_link }}" target="_blank" rel="noopener">{{ c.meeting_link }}</a></li>{% endif %}
+      {% if c.notes %}<li>{{ icon("notes") }}<span class="notes wrap">{{ c.notes }}</span></li>{% endif %}
+    </ul>
 
     <div class="popover-actions">
       {% if c.meeting_link %}
-      <a class="btn btn-primary" href="{{ c.meeting_link }}" target="_blank" rel="noopener">Join class</a>
+      <a class="btn btn-primary" href="{{ c.meeting_link }}" target="_blank" rel="noopener">{{ icon("video") }}Join class</a>
       {% endif %}
-      <a class="btn" href="{{ c.add_url }}" target="_blank" rel="noopener">Add to my calendar</a>
+      <a class="btn" href="{{ c.add_url }}" target="_blank" rel="noopener">{{ icon("calendar-plus") }}Add to my calendar</a>
     </div>
   </div>
 </div>

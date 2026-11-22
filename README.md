@@ -14,8 +14,14 @@ labels.py              The four labels, their colours / Google colorIds, and tex
 announcement_parser.py Turns announcement text into events (course, date, time, link)
 calendar_service.py    Service-account auth + create/list/get/update/delete helpers
 web_ui.py              Month grid / schedule view models and template rendering
-templates/*.html       calendar.html (public + admin), event_form.html, login.html, _macros.html
-static/styles.css      Google-Calendar-style responsive styles (Geist font)
+templates/*.html       calendar.html (public + admin), event_form.html, login.html, offline.html,
+                       _macros.html (calendar pieces), _icons.html (SVG icon set)
+static/styles.css      Google-Calendar-style responsive styles + animations (Geist font)
+static/app.js          Registers the service worker, install button, offline banner
+static/sw.js           Service worker (offline support); served at /sw.js
+static/icons/          App icons and logo images (generated, see below)
+assets/logo-source.jpg The original logo the icons are cut from
+tools/make_icons.py    Regenerates static/icons/ from the logo (needs Pillow)
 config.py              Reads environment variables / .env
 tests/                 Parser and label tests using real Miva announcement samples
 ```
@@ -65,9 +71,27 @@ New events default to **Live class**. The label is saved on the event in two pla
 3. DM the bot the same announcement. You get the ✅ reply, because quiet mode only silences groups.
 4. Turn it **off** again and check that group replies come back.
 
-## Font
+## Install as an app (PWA)
 
-The web UI uses [Geist](https://vercel.com/font), loaded from Google Fonts in `templates/base.html`. If Google Fonts can't be reached, it falls back to the device's system font.
+Students can install SyllabusSync on their phone or computer, and it opens like a normal app:
+
+- **Android (Chrome, Edge, Samsung Internet) and desktop Chrome/Edge:** tap the **Install** button in the top bar, or use the browser menu's **Install app** / **Add to Home screen**.
+- **iPhone / iPad (Safari):** tap **Install** to see the steps. In short, tap the **Share** button, choose **Add to Home Screen**, then tap **Add**.
+
+How it works:
+- `/manifest.webmanifest` gives the app's name, icons, colours, and shortcuts for the Schedule and Month views.
+- `/sw.js` is the service worker. It saves the public calendar each time it's opened, so the last schedule still shows **offline**, with an "You're offline" bar. Admin pages and anything that changes data always use the network.
+- Installing requires **HTTPS**, which Render and Railway provide. On your own computer, `http://localhost` also works.
+- After a deploy, installed apps pick up the new version the next time they're opened.
+
+**Changing the logo:** replace `assets/logo-source.jpg`, update the crop numbers at the top of `tools/make_icons.py` if the layout differs, then run `pip install pillow` and `python tools/make_icons.py`. Pillow is only needed for this step, so it isn't in `requirements.txt`.
+
+## Look and feel
+
+- Font: [Geist](https://vercel.com/font), loaded from Google Fonts in `templates/base.html`. It falls back to the system font when offline.
+- Icons: inline SVGs from [Lucide](https://lucide.dev) (ISC license) in `templates/_icons.html`. Use them in a template with `{{ icon("clock") }}`.
+- Animations: popovers scale in (on phones they slide up as a bottom sheet), schedule days fade in one after another, "Live now" badges pulse, and buttons and switches react when pressed. They're turned off for anyone whose device is set to reduce motion.
+- Light and dark mode follow the device setting.
 
 ## 1. One-time setup
 

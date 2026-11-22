@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+
+{% block title %}Offline · SyllabusSync{% endblock %}
+
+{% block content %}
+<div class="center-card fade-in">
+  <img class="lockup" src="{{ asset_url('icons/logo-lockup.png') }}" alt="SyllabusSync" width="220" height="207">
+  <div class="empty-state">
+    {{ icon("wifi-off", "empty-icon") }}
+    <p class="empty-title">You're offline</p>
+    <p class="empty-text">This page hasn't been saved on this device yet. Open the calendar once while you're online and it'll be available offline next time.</p>
+  </div>
+  <a class="btn btn-primary btn-block" href="/">{{ icon("refresh") }}Try again</a>
+</div>
+{% endblock %}

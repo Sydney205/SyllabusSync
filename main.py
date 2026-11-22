@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import re
 import secrets
@@ -15,7 +16,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from telegram import Update
 
@@ -34,7 +35,17 @@ from calendar_service import (
     update_calendar_event,
 )
 from labels import DEFAULT_LABEL, LABELS, normalize_label
-from web_ui import DONE_MESSAGES, STATIC_DIR, calendar_page, event_form_page, login_page, parse_view_args
+from web_ui import (
+    DONE_MESSAGES,
+    STATIC_DIR,
+    asset_url,
+    calendar_page,
+    event_form_page,
+    file_hash,
+    login_page,
+    offline_page,
+    parse_view_args,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log the bot token in request URLs
@@ -145,6 +156,72 @@ async def health(request: Request):
         "timezone": config.DEFAULT_TIMEZONE,
         "quiet_mode": bot_state.get_quiet_mode(),
     }
+
+
+# ---------------------------------------------------------------------------
+# PWA: manifest, service worker, offline page
+# ---------------------------------------------------------------------------
+
+PWA_PRECACHE_ASSETS = [
+    "styles.css",
+    "app.js",
+    "icons/logo-mark.png",
+    "icons/logo-lockup.png",
+    "icons/icon-192.png",
+    "icons/favicon-32.png",
+]
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def web_manifest():
+    icons = [
+        {"src": asset_url("icons/icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": asset_url("icons/icon-512.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": asset_url("icons/maskable-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+        {"src": asset_url("icons/maskable-512.png"), "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ]
+    manifest = {
+        "id": "/",
+        "name": "SyllabusSync",
+        "short_name": "SyllabusSync",
+        "description": "Live classes, exams, meetings and events from the shared class calendar.",
+        "start_url": "/?source=pwa",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "any",
+        "background_color": "#ffffff",
+        "theme_color": "#ffffff",
+        "categories": ["education", "productivity"],
+        "icons": icons,
+        "shortcuts": [
+            {"name": "Schedule", "short_name": "Schedule", "url": "/?view=agenda",
+             "icons": [{"src": asset_url("icons/icon-192.png"), "sizes": "192x192"}]},
+            {"name": "Month view", "short_name": "Month", "url": "/?view=month",
+             "icons": [{"src": asset_url("icons/icon-192.png"), "sizes": "192x192"}]},
+        ],
+    }
+    return JSONResponse(manifest, media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    """Served from the site root so the worker can control every page."""
+    source = (STATIC_DIR / "sw.js").read_text(encoding="utf-8")
+    precache = ["/offline", "/manifest.webmanifest"] + [asset_url(a) for a in PWA_PRECACHE_ASSETS]
+    version = "-".join(file_hash(STATIC_DIR / a) for a in ["sw.js", *PWA_PRECACHE_ASSETS])
+    version = hashlib.sha1(version.encode()).hexdigest()[:10]
+    body = source.replace("__VERSION__", version).replace("__PRECACHE__", json.dumps(precache))
+    return Response(
+        body,
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/offline", response_class=HTMLResponse, include_in_schema=False)
+async def offline(request: Request):
+    return offline_page(request)
 
 
 @app.post(WEBHOOK_PATH)
