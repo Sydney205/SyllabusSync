@@ -2,20 +2,22 @@
 
 A FastAPI server that:
 
-- listens to a **Telegram bot**. When an approved admin posts a class announcement, the bot adds it to a shared **Google Calendar** and replies with what it scheduled.
-- serves a **web form** at `/` where you can add a class by hand. The form can be protected with a passcode.
+- listens to a **Telegram bot**. When an approved admin posts a **Live class** announcement, the bot adds it to a shared **Google Calendar** and (unless quiet mode is on) replies with what it scheduled.
+- serves a **Google-Calendar-style web UI**: a public month/schedule view at `/`, and a passcode-protected admin view at `/admin` to create, edit and delete events with four labels.
 - exposes `GET /health` for hosting health checks.
 
 ```
-main.py                FastAPI app: lifespan (bot start/stop), /, /login, /events, /health, /telegram/webhook
-bot_handler.py         Telegram handlers (admin filter, replies, /whoami)
+main.py                FastAPI app: pages, /events, /admin/quiet, /api/events, /health, /telegram/webhook
+bot_handler.py         Telegram handlers (admin filter, Live-class-only rule, quiet mode, /quiet, /whoami)
+bot_state.py           Runtime quiet-mode setting (starts from BOT_QUIET_MODE, saved to bot_state.json)
+labels.py              The four labels, their colours / Google colorIds, and text classification
 announcement_parser.py Turns announcement text into events (course, date, time, link)
-calendar_service.py    Service-account auth + create_calendar_event(...)
-templates/*.html       HTML templates for the login and calendar form
-static/styles.css      Responsive styles for the web UI
-web_ui.py              Template rendering helpers
+calendar_service.py    Service-account auth + create/list/get/update/delete helpers
+web_ui.py              Month grid / schedule view models and template rendering
+templates/*.html       calendar.html (public + admin), event_form.html, login.html, _macros.html
+static/styles.css      Google-Calendar-style responsive styles (Geist font)
 config.py              Reads environment variables / .env
-tests/test_parser.py   Parser tests using real Miva announcement samples
+tests/                 Parser and label tests using real Miva announcement samples
 ```
 
 ## What the bot understands
@@ -35,6 +37,37 @@ COS 102 - Problem Solving
 - If an announcement is missing its date or time, the bot replies asking for it.
 - The bot ignores messages from non-admins, as well as ordinary chatter, stickers and photos without captions.
 - Re-posting the same announcement updates the existing event instead of adding a duplicate. Duplicates are matched on title and start time.
+- **Live classes only.** Every event the bot creates gets the label "Live class" (Google `colorId` 9, blue). If an admin's message is about an exam, meeting or other event (e.g. a "📢Exam Reminder📢" block, "class reps meeting tomorrow 4pm"), the bot creates nothing and replies that those go in through the web UI. Explicit class wording ("live lesson", "lecture", "revision class") wins, so a class that mentions upcoming exams is still a class.
+
+## Labels
+
+| Label | Web UI colour | Google Calendar `colorId` |
+|---|---|---|
+| Exam | Red `#DC2626` | 11 (Tomato) |
+| Meeting | Yellow/Gold `#D97706` | 5 (Banana) |
+| Event | Green `#059669` | 10 (Basil) |
+| Live class | Blue `#2563EB` | 9 (Blueberry) |
+
+New events default to **Live class**. The label is saved on the event in two places: its colour, and a private property. Events with neither (made before labels existed) show as Live class. Click a label in the sidebar to show only that label.
+
+## Quiet mode (Telegram groups)
+
+- **Off** (`BOT_QUIET_MODE=false`, the default): the bot replies in the group with ✅ confirmations, "I only add Live classes" notices and requests for missing dates.
+- **On**: the bot still reads admin messages and syncs Live classes, but **never posts in groups or supergroups**. Private chats with the bot still get replies.
+- You can flip it without redeploying:
+  - **Web UI:** in `/admin`, use the "Telegram quiet mode" switch in the sidebar.
+  - **Telegram (admins only):** send `/quiet on`, `/quiet off`, or `/quiet` to see the current status. Send it to the bot in a DM to get a reply; in a group it replies only when quiet mode ends up off.
+- Runtime changes are saved to `bot_state.json`. On hosts with a temporary disk (Render's free tier) the file is wiped when the service restarts or redeploys, and quiet mode goes back to `BOT_QUIET_MODE`. Set that variable to the value you want by default.
+
+**Testing quiet mode:**
+1. With quiet mode **off**, post a Live class announcement in your group as an admin. The bot replies ✅ and the event appears (blue) on the calendar. Post an exam reminder and the bot replies that it skipped it.
+2. Turn quiet mode **on** (switch or `/quiet on`). Post another Live class announcement. The event still appears on the calendar, and the group gets **no** message. The server log shows `Quiet mode: not replying in chat ...`.
+3. DM the bot the same announcement. You get the ✅ reply, because quiet mode only silences groups.
+4. Turn it **off** again and check that group replies come back.
+
+## Font
+
+The web UI uses [Geist](https://vercel.com/font), loaded from Google Fonts in `templates/base.html`. If Google Fonts can't be reached, it falls back to the device's system font.
 
 ## 1. One-time setup
 
@@ -64,9 +97,9 @@ copy .env.example .env                # then edit .env (keep RUN_POLLING=true)
 uvicorn main:app --reload --port 8000
 ```
 
-- Open http://localhost:8000 to use the web form.
+- Open http://localhost:8000 for the public calendar, and http://localhost:8000/admin to create, edit and delete events.
 - Send an announcement to your bot in Telegram. It should reply with ✅ and the event should show up in the calendar.
-- To run the parser tests: `pip install pytest` then `pytest -q`.
+- To run the tests: `pip install pytest` then `pytest -q`.
 
 Polling and webhooks can't both be active for the same bot. Starting in polling mode removes any existing webhook. Before you test locally again, stop the cloud deployment, or create a separate test bot.
 
@@ -90,6 +123,7 @@ Polling and webhooks can't both be active for the same bot. Starting in polling 
    | `TELEGRAM_WEBHOOK_SECRET` | A long random string (letters, digits, `_` and `-` only) |
    | `PUBLIC_BASE_URL` | e.g. `https://syllabussync.up.railway.app`. Render sets this automatically through `RENDER_EXTERNAL_URL`. |
    | `WEB_UI_PASSWORD` | Your passcode |
+   | `BOT_QUIET_MODE` | `false` (or `true` to keep the bot silent in groups by default) |
 
 4. Deploy. On startup the app calls Telegram's `setWebhook` with `PUBLIC_BASE_URL/telegram/webhook` and your secret. Requests that don't carry the secret header are rejected with 403.
 5. To check it worked, open `https://YOUR_URL/health`, then visit `https://api.telegram.org/bot<TOKEN>/getWebhookInfo`.
@@ -98,7 +132,15 @@ Run a **single instance/worker**. On free tiers the service may sleep when idle.
 
 ## API
 
-- `POST /events` (form fields: `title`, `start` = `2026-11-20T15:00`, `duration` in minutes, `notes`)
-  - Returns HTML by default. Send `Accept: application/json` to get JSON back.
-  - Scripts can authenticate with an `X-Passcode` header or a `passcode` form field.
-- `GET /health` returns `{"status": "ok", ...}`
+Public:
+- `GET /?view=month|agenda&date=2026-11-01&label=Exam` is the calendar page.
+- `GET /api/events` returns every event as JSON with `label`, `color` and `color_id`. Filter it with `?label=Exam`.
+- `GET /health` returns `{"status": "ok", "quiet_mode": false, ...}`.
+
+Admin (needs the session cookie, an `X-Passcode` header or a `passcode` form field):
+- `POST /events` creates an event. Form fields: `title`, `start` = `2026-11-20T15:00`, `duration` in minutes, `notes`, and `label` (`Exam`, `Meeting`, `Event` or `Live class`, default `Live class`).
+- `POST` or `PUT /events/{id}` updates an event. It takes the same fields.
+- `POST /events/{id}/delete` or `DELETE /events/{id}` deletes an event.
+- `POST /admin/quiet` with `quiet=on` or `quiet=off` turns quiet mode on or off.
+
+Send `Accept: application/json` to get JSON back instead of HTML.

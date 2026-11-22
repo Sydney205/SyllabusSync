@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from telegram import Update
 
+import bot_state
 import config
 from announcement_parser import URL_RE
 from bot_handler import build_application
@@ -32,7 +33,8 @@ from calendar_service import (
     list_calendar_events,
     update_calendar_event,
 )
-from web_ui import DONE_MESSAGES, STATIC_DIR, admin_page, edit_page, events_page, login_page
+from labels import DEFAULT_LABEL, LABELS, normalize_label
+from web_ui import DONE_MESSAGES, STATIC_DIR, calendar_page, event_form_page, login_page, parse_view_args
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log the bot token in request URLs
@@ -141,6 +143,7 @@ async def health(request: Request):
         "telegram": "disabled" if tg is None else ("polling" if config.RUN_POLLING else "webhook"),
         "calendar_id_set": bool(config.CALENDAR_ID),
         "timezone": config.DEFAULT_TIMEZONE,
+        "quiet_mode": bot_state.get_quiet_mode(),
     }
 
 
@@ -239,6 +242,18 @@ def _now() -> datetime:
     return datetime.now(config.TZ)
 
 
+def _safe_return_to(value: str | None) -> str:
+    """Only allow redirects back into the admin area (prevents open redirects)."""
+    if value and value.startswith("/admin") and not value.startswith("//") and "\\" not in value:
+        return value
+    return "/admin"
+
+
+def _with_done(url: str, code: str) -> str:
+    url = url.split("#", 1)[0]
+    return f"{url}{'&' if '?' in url else '?'}done={code}"
+
+
 async def _load_events() -> tuple[list[CalendarEvent], str | None]:
     """Return (events, error_message). Never raises, so pages can still render."""
     try:
@@ -252,9 +267,13 @@ async def _load_events() -> tuple[list[CalendarEvent], str | None]:
 
 
 def _event_json(ev: CalendarEvent) -> dict:
+    lbl = LABELS[ev.label]
     return {
         "id": ev.id,
         "title": ev.title,
+        "label": ev.label,
+        "color": lbl.color,
+        "color_id": lbl.color_id,
         "start": ev.start.isoformat(),
         "end": ev.end.isoformat(),
         "all_day": ev.all_day,
@@ -264,8 +283,8 @@ def _event_json(ev: CalendarEvent) -> dict:
     }
 
 
-def _validate_event_form(title: str, start: str, duration: int, notes: str):
-    """Return ((title, start_dt, end_dt, description, location), None) or (None, error)."""
+def _validate_event_form(title: str, start: str, duration: int, notes: str, label: str):
+    """Return ((title, start_dt, end_dt, description, location, label), None) or (None, error)."""
     title = title.strip()
     if not title:
         return None, "Title is required."
@@ -275,21 +294,41 @@ def _validate_event_form(title: str, start: str, duration: int, notes: str):
         return None, "Start must look like 2026-11-20T15:00."
     if not 5 <= duration <= 720:
         return None, "Duration must be between 5 and 720 minutes."
+    label_name = normalize_label(label or DEFAULT_LABEL)
+    if label_name is None:
+        return None, f"Label must be one of: {', '.join(LABELS)}."
     link_match = URL_RE.search(notes)
     location = link_match.group(0).rstrip(".,") if link_match else ""
-    return (title, start_dt, start_dt + timedelta(minutes=duration), notes.strip(), location), None
+    end_dt = start_dt + timedelta(minutes=duration)
+    return (title, start_dt, end_dt, notes.strip(), location, label_name), None
 
 
-async def _render_admin(request: Request, status_code: int = 200, **kwargs):
-    events, list_error = await _load_events()
-    return admin_page(
+async def _render_calendar(
+    request: Request,
+    *,
+    admin: bool,
+    view: str | None = None,
+    date_str: str | None = None,
+    label: str | None = None,
+    status_code: int = 200,
+    **kwargs,
+):
+    now = _now()
+    view, anchor, label_filter = parse_view_args(view, date_str, label, now.date())
+    events, error = await _load_events()
+    return calendar_page(
         request,
         events,
-        now=_now(),
+        admin=admin,
+        view=view,
+        anchor=anchor,
+        label_filter=label_filter,
+        now=now,
         timezone_name=config.DEFAULT_TIMEZONE,
-        list_error=list_error,
-        show_logout=bool(config.WEB_UI_PASSWORD),
-        status_code=status_code,
+        error=error,
+        quiet=bot_state.quiet_status() if admin else None,
+        show_logout=admin and bool(config.WEB_UI_PASSWORD),
+        status_code=503 if error and status_code == 200 else status_code,
         **kwargs,
     )
 
@@ -305,26 +344,55 @@ def _check_event_id(event_id: str) -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def public_schedule(request: Request):
-    """Public landing page: every event on the shared calendar as cards."""
-    events, error = await _load_events()
-    return events_page(request, events, now=_now(), error=error, timezone_name=config.DEFAULT_TIMEZONE)
+async def public_calendar(
+    request: Request, view: str | None = None, date: str | None = None, label: str | None = None
+):
+    """Public calendar (month grid or schedule). Anyone can view it."""
+    return await _render_calendar(request, admin=False, view=view, date_str=date, label=label)
 
 
 @app.get("/api/events")
-async def api_events():
-    """Public JSON list of every event (oldest first)."""
+async def api_events(label: str | None = None):
+    """Public JSON list of every event (oldest first). Optional ?label=Exam filter."""
     events, error = await _load_events()
     if error:
         return JSONResponse({"ok": False, "error": error}, status_code=503)
-    return {"ok": True, "timezone": config.DEFAULT_TIMEZONE, "events": [_event_json(e) for e in events]}
+    wanted = normalize_label(label)
+    if label and wanted is None:
+        return JSONResponse({"ok": False, "error": f"Unknown label. Use one of: {', '.join(LABELS)}."}, status_code=400)
+    return {
+        "ok": True,
+        "timezone": config.DEFAULT_TIMEZONE,
+        "labels": {l.name: {"color": l.color, "color_id": l.color_id} for l in LABELS.values()},
+        "events": [_event_json(e) for e in events if not wanted or e.label == wanted],
+    }
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin(request: Request, done: str | None = None):
+async def admin_calendar(
+    request: Request,
+    view: str | None = None,
+    date: str | None = None,
+    label: str | None = None,
+    done: str | None = None,
+):
     if not _is_authed(request):
         return login_page(request)
-    return await _render_admin(request, message=DONE_MESSAGES.get(done or ""), ok=True)
+    return await _render_calendar(
+        request, admin=True, view=view, date_str=date, label=label, message=DONE_MESSAGES.get(done or "")
+    )
+
+
+@app.get("/admin/events/new", response_class=HTMLResponse)
+async def new_event_page(request: Request, date: str | None = None, label: str | None = None):
+    if not _is_authed(request):
+        return login_page(request)
+    try:
+        day = datetime.fromisoformat(date).date() if date else _now().date()
+    except ValueError:
+        day = _now().date()
+    values = {"start": f"{day.isoformat()}T09:00", "label": normalize_label(label) or DEFAULT_LABEL}
+    return event_form_page(request, mode="create", values=values, timezone_name=config.DEFAULT_TIMEZONE)
 
 
 @app.get("/admin/events/{event_id}/edit", response_class=HTMLResponse)
@@ -335,10 +403,12 @@ async def edit_event_page(request: Request, event_id: str):
     try:
         ev = await asyncio.to_thread(get_calendar_event, event_id)
     except EventNotFound:
-        return await _render_admin(request, 404, message="That event no longer exists.", ok=False)
+        return await _render_calendar(request, admin=True, status_code=404, message="That event no longer exists.", ok=False)
     except Exception:
         log.exception("Failed to load event %s", event_id)
-        return await _render_admin(request, 502, message="Couldn't load that event from Google Calendar.", ok=False)
+        return await _render_calendar(
+            request, admin=True, status_code=502, message="Couldn't load that event from Google Calendar.", ok=False
+        )
 
     if ev.all_day:
         start_value, duration = ev.start.strftime("%Y-%m-%dT09:00"), 60
@@ -349,16 +419,39 @@ async def edit_event_page(request: Request, event_id: str):
         "title": ev.title,
         "start": start_value,
         "duration": duration,
+        "label": ev.label,
         "notes": "\n\n".join(p for p in (ev.meeting_link, ev.notes) if p),
     }
-    return edit_page(
-        request, event_id=event_id, values=values, timezone_name=config.DEFAULT_TIMEZONE, was_all_day=ev.all_day
+    return event_form_page(
+        request, mode="edit", event_id=event_id, values=values,
+        timezone_name=config.DEFAULT_TIMEZONE, was_all_day=ev.all_day,
     )
+
+
+@app.post("/admin/quiet")
+async def toggle_quiet_mode(request: Request, quiet: str = Form(""), return_to: str = Form("/admin")):
+    """Turn the Telegram bot's group quiet mode on/off (quiet=on|off)."""
+    if not _is_authed(request):
+        return _unauthorized(request)
+    value = quiet.strip().lower()
+    if value not in {"on", "off", "true", "false"}:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": "quiet must be 'on' or 'off'."}, status_code=400)
+        raise HTTPException(status_code=400, detail="quiet must be 'on' or 'off'.")
+    on = value in {"on", "true"}
+    bot_state.set_quiet_mode(on, "web UI")
+    if _wants_json(request):
+        return {"ok": True, **bot_state.quiet_status()}
+    return RedirectResponse(_with_done(_safe_return_to(return_to), "quiet_on" if on else "quiet_off"), status_code=303)
 
 
 # ---------------------------------------------------------------------------
 # Event create / update / delete (passcode-protected)
 # ---------------------------------------------------------------------------
+
+
+def _redirect_to_event_month(start_dt: datetime, code: str) -> RedirectResponse:
+    return RedirectResponse(f"/admin?date={start_dt.date().isoformat()}&done={code}", status_code=303)
 
 
 @app.post("/events")
@@ -368,31 +461,37 @@ async def create_event(
     start: str = Form(""),
     duration: int = Form(60),
     notes: str = Form(""),
+    label: str = Form(DEFAULT_LABEL),
     passcode: str | None = Form(None),
 ):
     if not _is_authed(request, passcode):
         return _unauthorized(request)
     json_mode = _wants_json(request)
-    values = {"title": title, "start": start, "duration": duration, "notes": notes}
+    values = {"title": title, "start": start, "duration": duration, "notes": notes, "label": label}
 
-    async def fail(msg: str, status: int):
+    def fail(msg: str, status: int):
         if json_mode:
             return JSONResponse({"ok": False, "error": msg}, status_code=status)
-        return await _render_admin(request, status, message=msg, ok=False, values=values)
+        return event_form_page(
+            request, mode="create", values=values, timezone_name=config.DEFAULT_TIMEZONE,
+            message=msg, status_code=status,
+        )
 
-    parsed, error = _validate_event_form(title, start, duration, notes)
+    parsed, error = _validate_event_form(title, start, duration, notes, label)
     if error:
-        return await fail(error, 400)
-    title, start_dt, end_dt, description, location = parsed
+        return fail(error, 400)
+    title, start_dt, end_dt, description, location, label = parsed
 
     try:
-        created = await asyncio.to_thread(create_calendar_event, title, start_dt, end_dt, description, location)
+        created = await asyncio.to_thread(
+            create_calendar_event, title, start_dt, end_dt, description, location, label
+        )
     except CalendarConfigError as exc:
         log.error("Calendar not configured: %s", exc)
-        return await fail(f"Server calendar setup problem: {exc}", 500)
+        return fail(f"Server calendar setup problem: {exc}", 500)
     except Exception:
         log.exception("Failed to create event from web UI")
-        return await fail("Google Calendar rejected the event. Check the server logs.", 502)
+        return fail("Google Calendar rejected the event. Check the server logs.", 502)
 
     if json_mode:
         return JSONResponse(
@@ -401,13 +500,15 @@ async def create_event(
                 "updated_existing": created.updated_existing,
                 "id": created.id,
                 "title": created.title,
+                "label": created.label,
+                "color_id": LABELS[created.label].color_id,
                 "start": created.start.isoformat(),
                 "end": created.end.isoformat(),
                 "html_link": created.html_link,
             },
             status_code=201,
         )
-    return RedirectResponse("/admin?done=created", status_code=303)
+    return _redirect_to_event_month(start_dt, "created")
 
 
 @app.post("/events/{event_id}")
@@ -419,33 +520,32 @@ async def update_event(
     start: str = Form(""),
     duration: int = Form(60),
     notes: str = Form(""),
+    label: str = Form(DEFAULT_LABEL),
     passcode: str | None = Form(None),
 ):
     if not _is_authed(request, passcode):
         return _unauthorized(request)
     _check_event_id(event_id)
     json_mode = _wants_json(request)
-    values = {"title": title, "start": start, "duration": duration, "notes": notes}
+    values = {"title": title, "start": start, "duration": duration, "notes": notes, "label": label}
 
     def fail(msg: str, status: int):
         if json_mode:
             return JSONResponse({"ok": False, "error": msg}, status_code=status)
-        return edit_page(
-            request,
-            event_id=event_id,
-            values=values,
-            timezone_name=config.DEFAULT_TIMEZONE,
-            message=msg,
-            status_code=status,
+        return event_form_page(
+            request, mode="edit", event_id=event_id, values=values,
+            timezone_name=config.DEFAULT_TIMEZONE, message=msg, status_code=status,
         )
 
-    parsed, error = _validate_event_form(title, start, duration, notes)
+    parsed, error = _validate_event_form(title, start, duration, notes, label)
     if error:
         return fail(error, 400)
-    title, start_dt, end_dt, description, location = parsed
+    title, start_dt, end_dt, description, location, label = parsed
 
     try:
-        await asyncio.to_thread(update_calendar_event, event_id, title, start_dt, end_dt, description, location)
+        await asyncio.to_thread(
+            update_calendar_event, event_id, title, start_dt, end_dt, description, location, label
+        )
     except EventNotFound:
         return fail("That event no longer exists. It may have been deleted.", 404)
     except Exception:
@@ -453,16 +553,17 @@ async def update_event(
         return fail("Google Calendar rejected the change. Check the server logs.", 502)
 
     if json_mode:
-        return {"ok": True, "id": event_id}
-    return RedirectResponse("/admin?done=updated", status_code=303)
+        return {"ok": True, "id": event_id, "label": label, "color_id": LABELS[label].color_id}
+    return _redirect_to_event_month(start_dt, "updated")
 
 
 @app.post("/events/{event_id}/delete")
 @app.delete("/events/{event_id}")
 async def delete_event(request: Request, event_id: str):
-    passcode = None
+    passcode, return_to = None, None
     if request.method == "POST":
-        passcode = (await request.form()).get("passcode")
+        form = await request.form()
+        passcode, return_to = form.get("passcode"), form.get("return_to")
     if not _is_authed(request, passcode):
         return _unauthorized(request)
     _check_event_id(event_id)
@@ -475,8 +576,8 @@ async def delete_event(request: Request, event_id: str):
         msg = "Google Calendar refused to delete the event. Check the server logs."
         if json_mode:
             return JSONResponse({"ok": False, "error": msg}, status_code=502)
-        return await _render_admin(request, 502, message=msg, ok=False)
+        return await _render_calendar(request, admin=True, status_code=502, message=msg, ok=False)
 
     if json_mode:
         return {"ok": True, "id": event_id}
-    return RedirectResponse("/admin?done=deleted", status_code=303)
+    return RedirectResponse(_with_done(_safe_return_to(return_to), "deleted"), status_code=303)

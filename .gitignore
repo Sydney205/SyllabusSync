@@ -5,6 +5,10 @@ service_account.json
 # Google Cloud key downloads are named <project-id>-<key-id>.json
 syllabussync-*.json
 
+# Runtime state (quiet mode toggle)
+bot_state.json
+bot_state.json.tmp
+
 # Python
 __pycache__/
 *.py[cod]

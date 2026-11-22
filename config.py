@@ -52,6 +52,10 @@ RUN_POLLING = _bool("RUN_POLLING", False)
 # Polling with a token that already has a webhook would silently take messages away from the
 # deployed bot, so startup refuses unless this is explicitly set to true.
 FORCE_POLLING = _bool("FORCE_POLLING", False)
+# Quiet mode: the bot still syncs Live classes but never posts in group chats.
+# This is the starting value; it can be flipped at runtime (web UI or /quiet).
+BOT_QUIET_MODE = _bool("BOT_QUIET_MODE", False)
+BOT_STATE_FILE = os.getenv("BOT_STATE_FILE", "bot_state.json").strip() or "bot_state.json"
 
 # --- Web UI ---
 WEB_UI_PASSWORD = os.getenv("WEB_UI_PASSWORD", "")

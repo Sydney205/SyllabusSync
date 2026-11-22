@@ -22,6 +22,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import config
+from labels import DEFAULT_LABEL, LABELS, label_from_event, normalize_label
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,22 @@ class CreatedEvent:
     end: datetime
     html_link: str
     updated_existing: bool  # True if an identical event already existed and was refreshed
+    label: str = DEFAULT_LABEL
+
+
+def _require_label(label: str | None) -> str:
+    name = normalize_label(label)
+    if name is None:
+        raise ValueError(f"Unknown label {label!r}. Use one of: {', '.join(LABELS)}.")
+    return name
+
+
+def _label_fields(label: str) -> dict:
+    """Event fields that store the label: Google colour + our own private property."""
+    return {
+        "colorId": LABELS[label].color_id,
+        "extendedProperties": {"private": {"syllabussyncLabel": label}},
+    }
 
 
 def _load_credentials() -> service_account.Credentials:
@@ -113,6 +130,7 @@ def create_calendar_event(
     end_dt: datetime,
     description: str = "",
     location: str = "",
+    label: str = DEFAULT_LABEL,
 ) -> CreatedEvent:
     """Create (or refresh, if it already exists) an event on the shared calendar.
 
@@ -124,6 +142,7 @@ def create_calendar_event(
     start_dt, end_dt = _localize(start_dt), _localize(end_dt)
     if end_dt <= start_dt:
         raise ValueError("End time must be after start time.")
+    label = _require_label(label)
 
     service = get_service()
     event_id = _event_id(title, start_dt)
@@ -133,6 +152,7 @@ def create_calendar_event(
         "description": description,
         "location": location,
         "status": "confirmed",
+        **_label_fields(label),
         "start": {"dateTime": start_dt.isoformat(), "timeZone": config.DEFAULT_TIMEZONE},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": config.DEFAULT_TIMEZONE},
         "reminders": {
@@ -168,6 +188,7 @@ def create_calendar_event(
         end=end_dt,
         html_link=result.get("htmlLink", ""),
         updated_existing=updated_existing,
+        label=label,
     )
 
 
@@ -196,6 +217,7 @@ class CalendarEvent:
     meeting_link: str
     notes: str
     location: str
+    label: str = DEFAULT_LABEL
 
 
 class EventNotFound(LookupError):
@@ -209,15 +231,18 @@ def update_calendar_event(
     end_dt: datetime,
     description: str = "",
     location: str = "",
+    label: str = DEFAULT_LABEL,
 ) -> None:
-    """Change an existing event's title, time, description and location (blocking)."""
+    """Change an existing event's title, time, label, description and location (blocking)."""
     title = (title or "").strip()
     if not title:
         raise ValueError("Event title is required.")
     start_dt, end_dt = _localize(start_dt), _localize(end_dt)
     if end_dt <= start_dt:
         raise ValueError("End time must be after start time.")
+    label = _require_label(label)
     body = {
+        **_label_fields(label),
         "summary": title,
         "description": description,
         "location": location,
@@ -308,6 +333,10 @@ def _to_event(item: dict) -> CalendarEvent | None:
         meeting_link=link,
         notes=notes,
         location="" if location == link else location,
+        label=label_from_event(
+            item.get("extendedProperties", {}).get("private", {}).get("syllabussyncLabel"),
+            item.get("colorId"),
+        ),
     )
 
 

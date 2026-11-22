@@ -1,14 +1,17 @@
-"""Template rendering helpers for the server-rendered web UI."""
+"""View models + template rendering for the Google-Calendar-style web UI."""
 
 from __future__ import annotations
 
+import calendar
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from pathlib import Path
 from urllib.parse import urlencode
 
 from starlette.templating import Jinja2Templates
+
+from labels import DEFAULT_LABEL, LABELS
 
 ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = ROOT / "templates"
@@ -16,21 +19,28 @@ STATIC_DIR = ROOT / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
-# Short, fixed status messages shown after a redirect (/admin?done=created).
-# Using codes instead of free text means nobody can craft a link that shows a fake message.
+VIEWS = ("month", "agenda")
+MAX_CHIPS_PER_DAY = 3
+WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]  # Google Calendar's default week
+
+# Fixed status messages shown after a redirect (/admin?done=created). Codes, not free
+# text, so nobody can craft a link that shows a fake message.
 DONE_MESSAGES = {
     "created": "Event added to the calendar.",
     "updated": "Event updated.",
     "deleted": "Event deleted.",
+    "quiet_on": "Quiet mode is on. The bot won't post in Telegram groups.",
+    "quiet_off": "Quiet mode is off. The bot will confirm in Telegram groups.",
 }
+
+
+def label_options() -> list[dict]:
+    return [{"name": l.name, "slug": l.slug, "color": l.color} for l in LABELS.values()]
 
 
 def login_page(request, error: str | None = None, status_code: int = 200):
     return templates.TemplateResponse(
-        request=request,
-        name="login.html",
-        context={"error": error},
-        status_code=status_code,
+        request=request, name="login.html", context={"error": error}, status_code=status_code
     )
 
 
@@ -38,22 +48,19 @@ def login_page(request, error: str | None = None, status_code: int = 200):
 # Event cards
 # ---------------------------------------------------------------------------
 
-_COURSE_CODE_RE = re.compile(r"^((?:[A-Z]{2,}-)?[A-Z]{2,4}\s?\d{3}[A-Z]?)\b")
-
 
 def _clock(dt: datetime) -> str:
-    return dt.strftime("%I:%M %p").lstrip("0")
+    return dt.strftime("%I:%M %p").lstrip("0").replace(":00 ", " ")
 
 
-def _day_label(d, today) -> str:
-    if d == today:
-        return "Today"
-    if d == today + timedelta(days=1):
-        return "Tomorrow"
-    if d == today - timedelta(days=1):
-        return "Yesterday"
-    fmt = f"%A, {d.day} %B" + (" %Y" if d.year != today.year else "")
-    return d.strftime(fmt)
+def _short_clock(dt: datetime) -> str:
+    """Google-style compact time: 3pm, 4:30pm."""
+    s = dt.strftime("%I:%M%p").lstrip("0").lower()
+    return s.replace(":00", "")
+
+
+def _long_date(d: date) -> str:
+    return d.strftime(f"%A, {d.day} %B %Y")
 
 
 def _add_to_calendar_url(ev) -> str:
@@ -71,19 +78,20 @@ def _add_to_calendar_url(ev) -> str:
 
 
 def _card(ev, now: datetime) -> dict:
-    code_match = _COURSE_CODE_RE.match(ev.title)
-    title = re.sub(r"\s*\(revision\)\s*$", "", ev.title, flags=re.I)
+    lbl = LABELS.get(ev.label) or LABELS[DEFAULT_LABEL]
     return {
         "id": ev.id,
-        "title": title,
-        "full_title": ev.title,
-        "code": code_match.group(1) if code_match else "",
-        "is_revision": "revision" in ev.title.lower(),
+        "dom_id": "ev-" + re.sub(r"[^A-Za-z0-9_-]", "", ev.id),
+        "title": ev.title,
+        "label": lbl.name,
+        "slug": lbl.slug,
+        "color": lbl.color,
+        "all_day": ev.all_day,
         "live": ev.start <= now < ev.end,
+        "past": ev.end <= now,
+        "short_time": "" if ev.all_day else _short_clock(ev.start),
         "time_label": "All day" if ev.all_day else f"{_clock(ev.start)} – {_clock(ev.end)}",
-        "month": ev.start.strftime("%b"),
-        "day": ev.start.day,
-        "weekday": ev.start.strftime("%a"),
+        "date_label": _long_date(ev.start.date()),
         "meeting_link": ev.meeting_link,
         "location": ev.location,
         "notes": ev.notes,
@@ -92,92 +100,183 @@ def _card(ev, now: datetime) -> dict:
     }
 
 
-def _group_by_day(events, now: datetime) -> list[dict]:
-    today = now.date()
-    return [
-        {"label": _day_label(day, today), "cards": [_card(e, now) for e in items]}
-        for day, items in groupby(events, key=lambda e: e.start.date())
-    ]
-
-
-def _schedule_context(events, now: datetime) -> dict:
-    events = events or []
-    upcoming = [e for e in events if e.end > now]
-    past = sorted((e for e in events if e.end <= now), key=lambda e: e.start, reverse=True)
-    return {
-        "upcoming_groups": _group_by_day(upcoming, now),
-        "past_groups": _group_by_day(past, now),
-        "upcoming_count": len(upcoming),
-        "past_count": len(past),
-    }
-
-
 # ---------------------------------------------------------------------------
-# Pages
+# Calendar page
 # ---------------------------------------------------------------------------
 
 
-def events_page(request, events, *, now: datetime, error: str | None = None, timezone_name: str = ""):
-    """Public schedule (GET /)."""
-    return templates.TemplateResponse(
-        request=request,
-        name="events.html",
-        context={**_schedule_context(events, now), "error": error, "timezone": timezone_name, "admin": False},
-        status_code=503 if error else 200,
-    )
+def parse_view_args(view: str | None, date_str: str | None, label: str | None, today: date):
+    view = view if view in VIEWS else "month"
+    try:
+        anchor = date.fromisoformat(date_str) if date_str else today
+    except ValueError:
+        anchor = today
+    label = label if label in LABELS else None
+    return view, anchor, label
 
 
-def admin_page(
+def _shift_month(d: date, months: int) -> date:
+    y, m = divmod(d.month - 1 + months, 12)
+    y += d.year
+    m += 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def _url(base: str, **params) -> str:
+    clean = {k: v for k, v in params.items() if v}
+    return base + ("?" + urlencode(clean) if clean else "")
+
+
+def calendar_page(
     request,
     events,
     *,
+    admin: bool,
+    view: str,
+    anchor: date,
+    label_filter: str | None,
     now: datetime,
     timezone_name: str,
-    list_error: str | None = None,
+    error: str | None = None,
     message: str | None = None,
     ok: bool = True,
-    values: dict | None = None,
+    quiet: dict | None = None,
     show_logout: bool = False,
     status_code: int = 200,
 ):
-    """Admin dashboard (GET /admin): create form + every event with edit/delete."""
+    base = "/admin" if admin else "/"
+    today = now.date()
+    month_start = anchor.replace(day=1)
+    month_end = _shift_month(month_start, 1)  # exclusive
+
+    visible = [e for e in (events or []) if not label_filter or e.label == label_filter]
+    by_day: dict[date, list] = {}
+    for e in visible:
+        by_day.setdefault(e.start.date(), []).append(e)
+
+    # Month grid: whole weeks (Sunday first) covering the month.
+    grid_start = month_start - timedelta(days=(month_start.weekday() + 1) % 7)
+    weeks, cursor = [], grid_start
+    while cursor < month_end or len(weeks) < 5:
+        week = []
+        for _ in range(7):
+            day_events = [_card(e, now) for e in by_day.get(cursor, [])]
+            week.append(
+                {
+                    "date": cursor,
+                    "day": cursor.day,
+                    "in_month": cursor.month == anchor.month,
+                    "is_today": cursor == today,
+                    "chips": day_events[:MAX_CHIPS_PER_DAY],
+                    "more": max(0, len(day_events) - MAX_CHIPS_PER_DAY),
+                    "agenda_url": _url(base, view="agenda", date=cursor.isoformat(), label=label_filter)
+                    + f"#day-{cursor.isoformat()}",
+                    "create_url": f"/admin/events/new?date={cursor.isoformat()}" if admin else "",
+                }
+            )
+            cursor += timedelta(days=1)
+        weeks.append(week)
+
+    # Agenda: every day in the month that has events.
+    month_events = sorted((e for e in visible if month_start <= e.start.date() < month_end), key=lambda e: e.start)
+    agenda = [
+        {
+            "date": d,
+            "dom_id": f"day-{d.isoformat()}",
+            "weekday": d.strftime("%a"),
+            "day": d.day,
+            "month": d.strftime("%b"),
+            "is_today": d == today,
+            "past": d < today,
+            "cards": [_card(e, now) for e in items],
+        }
+        for d, items in groupby(month_events, key=lambda e: e.start.date())
+    ]
+
+    # Every event that can be clicked on this page gets a details popover.
+    shown_ids, popovers = set(), []
+    for e in visible:
+        if grid_start <= e.start.date() < cursor or month_start <= e.start.date() < month_end:
+            if e.id not in shown_ids:
+                shown_ids.add(e.id)
+                popovers.append(_card(e, now))
+
+    nav = {
+        "prev": _url(base, view=view, date=_shift_month(month_start, -1).isoformat(), label=label_filter),
+        "next": _url(base, view=view, date=_shift_month(month_start, 1).isoformat(), label=label_filter),
+        "today": _url(base, view=view, label=label_filter),
+        "month": _url(base, view="month", date=anchor.isoformat(), label=label_filter),
+        "agenda": _url(base, view="agenda", date=anchor.isoformat(), label=label_filter),
+    }
+    filters = [
+        {
+            **opt,
+            "active": label_filter == opt["name"],
+            "url": _url(
+                base, view=view, date=anchor.isoformat(),
+                label=None if label_filter == opt["name"] else opt["name"],
+            ),
+            "count": sum(1 for e in events or [] if e.label == opt["name"] and month_start <= e.start.date() < month_end),
+        }
+        for opt in label_options()
+    ]
+
     return templates.TemplateResponse(
         request=request,
-        name="admin.html",
+        name="calendar.html",
         context={
-            **_schedule_context(events, now),
-            "error": list_error,
+            "admin": admin,
+            "view": view,
+            "title": anchor.strftime("%B %Y"),
+            "weekdays": WEEKDAYS,
+            "weeks": weeks,
+            "agenda": agenda,
+            "popovers": popovers,
+            "nav": nav,
+            "filters": filters,
+            "label_filter": label_filter,
+            "clear_filter_url": _url(base, view=view, date=anchor.isoformat()),
+            "error": error,
             "message": message,
             "ok": ok,
-            "values": values or {},
-            "open_form": bool(values),  # keep the create form expanded after a validation error
+            "quiet": quiet,
             "show_logout": show_logout,
             "timezone": timezone_name,
-            "admin": True,
+            "return_to": _url(base, view=view, date=anchor.isoformat(), label=label_filter),
         },
         status_code=status_code,
     )
 
 
-def edit_page(
+# ---------------------------------------------------------------------------
+# Create / edit form
+# ---------------------------------------------------------------------------
+
+
+def event_form_page(
     request,
     *,
-    event_id: str,
+    mode: str,  # "create" or "edit"
     values: dict,
     timezone_name: str,
+    event_id: str | None = None,
     message: str | None = None,
     was_all_day: bool = False,
     status_code: int = 200,
 ):
+    values = {"label": DEFAULT_LABEL, "duration": 60, **values}
     return templates.TemplateResponse(
         request=request,
-        name="edit.html",
+        name="event_form.html",
         context={
+            "mode": mode,
             "event_id": event_id,
             "values": values,
+            "labels": label_options(),
             "message": message,
             "was_all_day": was_all_day,
             "timezone": timezone_name,
+            "action": f"/events/{event_id}" if mode == "edit" else "/events",
         },
         status_code=status_code,
     )

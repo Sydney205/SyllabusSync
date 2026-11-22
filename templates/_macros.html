@@ -1,110 +1,100 @@
-{# Shared building blocks for the schedule pages. #}
+{# Shared building blocks for the calendar pages. #}
 
-{% macro event_fields(values, timezone) %}
-  <div class="field">
-    <label for="title">Title</label>
-    <input id="title" name="title" required maxlength="200"
-           placeholder="COS 102 - Problem Solving" value="{{ values.get('title', '') }}">
-  </div>
-
-  <div class="field-row">
-    <div class="field">
-      <label for="start">Date &amp; start time</label>
-      <input id="start" name="start" type="datetime-local" required value="{{ values.get('start', '') }}">
-      <p class="hint">Times are in {{ timezone }}.</p>
-    </div>
-    <div class="field">
-      <label for="duration">Duration (minutes)</label>
-      <input id="duration" name="duration" type="number" min="5" max="720" step="5" required
-             value="{{ values.get('duration', '60') }}">
-    </div>
-  </div>
-
-  <div class="field">
-    <label for="notes">Meeting link / notes</label>
-    <textarea id="notes" name="notes" placeholder="https://meet.google.com/...">{{ values.get('notes', '') }}</textarea>
-  </div>
+{% macro chip(c) %}
+<a class="chip lbl-{{ c.slug }}{% if c.all_day %} is-allday{% endif %}{% if c.past %} is-past{% endif %}"
+   href="#{{ c.dom_id }}" title="{{ c.time_label }} · {{ c.title }} ({{ c.label }})">
+  <span class="dot" aria-hidden="true"></span>
+  {% if c.short_time %}<span class="chip-time">{{ c.short_time }}</span>{% endif %}
+  <span class="chip-title">{{ c.title }}</span>
+</a>
 {% endmacro %}
 
 
-{% macro event_card(card, admin=False) %}
-<article class="event-card{% if card.live %} is-live{% endif %}">
-  <div class="date-badge" aria-hidden="true">
-    <span class="date-month">{{ card.month }}</span>
-    <span class="date-day">{{ card.day }}</span>
-    <span class="date-weekday">{{ card.weekday }}</span>
+{% macro month_grid(weeks, weekdays, admin) %}
+<div class="month" role="grid" aria-label="Month view">
+  <div class="month-head" role="row">
+    {% for w in weekdays %}<div class="month-weekday" role="columnheader">{{ w }}</div>{% endfor %}
   </div>
-
-  <div class="event-body">
-    {% if card.code or card.is_revision or card.live %}
-    <div class="tags">
-      {% if card.live %}<span class="tag tag-live">Live now</span>{% endif %}
-      {% if card.code %}<span class="tag">{{ card.code }}</span>{% endif %}
-      {% if card.is_revision %}<span class="tag tag-revision">Revision</span>{% endif %}
-    </div>
-    {% endif %}
-
-    <h3 class="event-title">{{ card.title }}</h3>
-    <p class="event-time"><time datetime="{{ card.iso_start }}">{{ card.time_label }}</time></p>
-
-    {% if card.location %}<p class="event-meta">{{ card.location }}</p>{% endif %}
-    {% if card.notes %}<p class="event-notes">{{ card.notes }}</p>{% endif %}
-
-    <div class="event-actions">
-      {% if card.meeting_link %}
-      <a class="button button-primary" href="{{ card.meeting_link }}" target="_blank" rel="noopener">Join class</a>
-      {% endif %}
-      {% if admin %}
-      <a class="button" href="/admin/events/{{ card.id | urlencode }}/edit">Edit</a>
-      <form method="post" action="/events/{{ card.id | urlencode }}/delete"
-            onsubmit='return confirm({{ ("Delete “" ~ card.full_title ~ "”? This removes it from the shared calendar.") | tojson }})'>
-        <button class="button button-danger" type="submit">Delete</button>
-      </form>
-      {% else %}
-      <a class="button" href="{{ card.add_url }}" target="_blank" rel="noopener">Add to my calendar</a>
-      {% endif %}
-    </div>
-  </div>
-</article>
-{% endmacro %}
-
-
-{% macro schedule(upcoming_groups, past_groups, upcoming_count, past_count, error, admin=False) %}
-{% if error %}
-<div class="message error" role="alert">{{ error }}</div>
-{% else %}
-
-<section class="schedule-section" aria-labelledby="upcoming-heading">
-  <h2 id="upcoming-heading" class="section-heading">
-    Upcoming <span class="count">{{ upcoming_count }}</span>
-  </h2>
-  {% if upcoming_groups %}
-    {% for group in upcoming_groups %}
-    <div class="day-group">
-      <h3 class="day-label">{{ group.label }}</h3>
-      <div class="card-grid">
-        {% for card in group.cards %}{{ event_card(card, admin) }}{% endfor %}
+  {% for week in weeks %}
+  <div class="month-week" role="row">
+    {% for d in week %}
+    <div class="day-cell{% if not d.in_month %} is-outside{% endif %}{% if d.is_today %} is-today{% endif %}" role="gridcell">
+      <div class="day-top">
+        <a class="day-num" href="{{ d.agenda_url }}" aria-label="{{ d.date.strftime('%A %d %B') }}">{{ d.day }}</a>
+        {% if admin %}<a class="day-add" href="{{ d.create_url }}" aria-label="Add an event on {{ d.date.strftime('%d %B') }}">+</a>{% endif %}
       </div>
+      {% for c in d.chips %}{{ chip(c) }}{% endfor %}
+      {% if d.more %}<a class="more-link" href="{{ d.agenda_url }}">+{{ d.more }} more</a>{% endif %}
     </div>
     {% endfor %}
-  {% else %}
-    <p class="empty-state">No upcoming classes yet. Check back after the next announcement.</p>
-  {% endif %}
-</section>
-
-{% if past_groups %}
-<details class="schedule-section past-section">
-  <summary class="section-heading">Past <span class="count">{{ past_count }}</span></summary>
-  {% for group in past_groups %}
-  <div class="day-group">
-    <h3 class="day-label">{{ group.label }}</h3>
-    <div class="card-grid">
-      {% for card in group.cards %}{{ event_card(card, admin) }}{% endfor %}
-    </div>
   </div>
   {% endfor %}
-</details>
-{% endif %}
+</div>
+{% endmacro %}
 
+
+{% macro agenda_view(agenda, admin) %}
+{% if agenda %}
+<div class="agenda">
+  {% for day in agenda %}
+  <section class="agenda-day{% if day.is_today %} is-today{% endif %}{% if day.past %} is-past{% endif %}" id="{{ day.dom_id }}">
+    <div class="agenda-date">
+      <span class="agenda-daynum">{{ day.day }}</span>
+      <span class="agenda-dayname">{{ day.month }}, {{ day.weekday }}</span>
+    </div>
+    <div class="agenda-items">
+      {% for c in day.cards %}
+      <a class="agenda-item lbl-{{ c.slug }}" href="#{{ c.dom_id }}">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="agenda-time">{{ c.time_label }}</span>
+        <span class="agenda-title">{{ c.title }}</span>
+        <span class="tag">{% if c.live %}Live now · {% endif %}{{ c.label }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">Nothing scheduled this month.{% if admin %} Use <strong>Create</strong> to add something.{% endif %}</p>
 {% endif %}
+{% endmacro %}
+
+
+{% macro popover(c, admin, return_to) %}
+<div class="popover-layer" id="{{ c.dom_id }}" role="dialog" aria-modal="true" aria-labelledby="{{ c.dom_id }}-title">
+  <a class="popover-backdrop" href="#close" aria-label="Close" tabindex="-1"></a>
+  <div class="popover lbl-{{ c.slug }}">
+    <div class="popover-tools">
+      {% if admin %}
+      <a class="tool-btn" href="/admin/events/{{ c.id | urlencode }}/edit">✎ Edit</a>
+      <form method="post" action="/events/{{ c.id | urlencode }}/delete"
+            onsubmit='return confirm({{ ("Delete “" ~ c.title ~ "”? This removes it from the shared calendar.") | tojson }})'>
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button class="tool-btn tool-danger" type="submit">🗑 Delete</button>
+      </form>
+      {% endif %}
+      <a class="icon-btn" href="#close" aria-label="Close">✕</a>
+    </div>
+
+    <div class="popover-head">
+      <span class="swatch" aria-hidden="true"></span>
+      <div>
+        <h2 class="popover-title" id="{{ c.dom_id }}-title">{{ c.title }}</h2>
+        <p class="popover-when">{{ c.date_label }}<br>{{ c.time_label }}</p>
+      </div>
+    </div>
+
+    <p class="popover-row"><span class="tag">{{ c.label }}</span>{% if c.live %} <span class="tag tag-live">Live now</span>{% endif %}</p>
+    {% if c.location %}<p class="popover-row popover-muted">📍 {{ c.location }}</p>{% endif %}
+    {% if c.notes %}<p class="popover-notes">{{ c.notes }}</p>{% endif %}
+
+    <div class="popover-actions">
+      {% if c.meeting_link %}
+      <a class="btn btn-primary" href="{{ c.meeting_link }}" target="_blank" rel="noopener">Join class</a>
+      {% endif %}
+      <a class="btn" href="{{ c.add_url }}" target="_blank" rel="noopener">Add to my calendar</a>
+    </div>
+  </div>
+</div>
 {% endmacro %}

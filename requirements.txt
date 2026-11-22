@@ -1,9 +1,8 @@
 # Web server
 fastapi>=0.115
 uvicorn[standard]>=0.30
-python-multipart>=0.0.9   # form parsing for /login and /events
+python-multipart>=0.0.9   # form parsing for /login, /events and /admin/quiet
 jinja2>=3.1               # HTML templates (templates/)
-markupsafe>=2.1           # imported directly in web_ui.py
 
 # Telegram bot
 python-telegram-bot>=21.0,<23

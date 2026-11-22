@@ -41,8 +41,8 @@ TIME_LABEL_RE = re.compile(r"^time\s*[:\-]?\s*(?P<v>.+)$", re.I)
 NOTE_LABEL_RE = re.compile(r"^notes?\s*[:\-]\s*(?P<v>.+)$", re.I)
 GREETING_RE = re.compile(r"^(hi|hello|hey|dear|good (morning|afternoon|evening)|see you|don'?t miss)\b", re.I)
 KEYWORD_RE = re.compile(
-    r"\b(class(es)?|lessons?|lectures?|tutorials?|seminars?|exams?|tests?|quiz(zes)?|"
-    r"sessions?|revision|webinars?|live)\b",
+    r"\b(class(es)?|lessons?|lectures?|tutorials?|seminars?|exams?|examinations?|tests?|quiz(zes)?|"
+    r"cbt|sessions?|revision|webinars?|live|meetings?|town\s?halls?|events?|workshops?|conferences?)\b",
     re.I,
 )
 
@@ -88,6 +88,9 @@ class ParsedEvent:
     end: datetime
     link: str = ""
     notes: list[str] = field(default_factory=list)
+    # Text of the reminder block the event came from (header + intro lines + title),
+    # used to tell live classes apart from exams, meetings and other events.
+    context: str = ""
 
     @property
     def description(self) -> str:
@@ -103,6 +106,7 @@ class ParsedEvent:
 class ParseResult:
     events: list[ParsedEvent] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)  # clarification requests
+    problem_contexts: list[str] = field(default_factory=list)  # block text for each problem
     relevant: bool = False  # False => looks like ordinary chatter; ignore silently
 
 
@@ -260,6 +264,7 @@ def _parse_structured(text: str, now: datetime) -> ParseResult | None:
     carried_date: date | None = None
     revision = False
     block_notes: list[str] = []
+    block_lines: list[str] = []  # header/intro lines of the current reminder block
     block_start = 0  # index into drafts where the current reminder block starts
 
     def finish_block():
@@ -272,6 +277,7 @@ def _parse_structured(text: str, now: datetime) -> ParseResult | None:
             finish_block()
             block_start = len(drafts)
             block_notes = []
+            block_lines = [line]
             current = None
             carried_date = None
             revision = "revision" in line.lower()
@@ -285,7 +291,10 @@ def _parse_structured(text: str, now: datetime) -> ParseResult | None:
             if revision:
                 title += " (Revision)"
             # Courses listed without their own Date: line inherit the latest date in the reminder.
-            current = {"title": title, "date": None, "time": None, "link": "", "notes": [], "carried": carried_date}
+            current = {
+                "title": title, "date": None, "time": None, "link": "", "notes": [], "carried": carried_date,
+                "context": " ".join(block_lines + [title]),
+            }
             drafts.append(current)
             continue
 
@@ -314,6 +323,9 @@ def _parse_structured(text: str, now: datetime) -> ParseResult | None:
                 current["notes"].append(m["v"])
             continue
 
+        if current is None:
+            block_lines.append(line)  # intro text such as "Don't miss today's exam for:"
+
         if "revision" in line.lower():
             revision = True
             continue
@@ -332,10 +344,11 @@ def _parse_structured(text: str, now: datetime) -> ParseResult | None:
             missing.append("time" if "time_raw" not in d else f"time (couldn't read “{d['time_raw']}”)")
         if missing:
             result.problems.append(f"{d['title']}: missing {' and '.join(missing)}")
+            result.problem_contexts.append(d["context"])
             continue
         start_t, end_t = d["time"]
         start_dt, end_dt = _combine(event_date, start_t, end_t, d.get("duration"))
-        result.events.append(ParsedEvent(d["title"], start_dt, end_dt, d["link"], d["notes"]))
+        result.events.append(ParsedEvent(d["title"], start_dt, end_dt, d["link"], d["notes"], d["context"]))
     return result
 
 
@@ -385,11 +398,12 @@ def _parse_freeform(text: str, now: datetime) -> ParseResult:
     missing = [name for name, v in (("date", d), ("time", t)) if v is None]
     if missing:
         result.problems.append(f"{title}: missing {' and '.join(missing)}")
+        result.problem_contexts.append(text)
         return result
 
     link_m = URL_RE.search(text)
     start_dt, end_dt = _combine(d, t[0], t[1], parse_duration(text))
     result.events.append(
-        ParsedEvent(title, start_dt, end_dt, link_m.group(0).rstrip(".,") if link_m else "")
+        ParsedEvent(title, start_dt, end_dt, link_m.group(0).rstrip(".,") if link_m else "", context=text)
     )
     return result
